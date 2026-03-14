@@ -41,6 +41,7 @@ def plot_quadrant_st(df):
     pe_threshold = plot_df['T_PE'].median()
     momentum_threshold = 0
 
+    # FIX: Set a fixed size (s=100) instead of using RVOL for bubble size
     ax.scatter(plot_df['T_PE'], plot_df['Score'], 
                s=100, alpha=0.7, 
                c='dodgerblue', edgecolors='black')
@@ -52,6 +53,7 @@ def plot_quadrant_st(df):
     ax.axvline(x=pe_threshold, color='red', linestyle='--', alpha=0.3)
     ax.axhline(y=momentum_threshold, color='red', linestyle='--', alpha=0.3)
 
+    # Quadrant Labels
     ax.text(pe_threshold*0.5, plot_df['Score'].max(), 'THE LEADER', color='green', fontweight='bold', ha='center')
     ax.text(pe_threshold*2.0, plot_df['Score'].max(), 'THE BUBBLE', color='orange', fontweight='bold', ha='center')
     ax.text(pe_threshold*0.5, plot_df['Score'].min(), 'TURNAROUND', color='blue', fontweight='bold', ha='center')
@@ -86,14 +88,10 @@ def generate_unified_dashboard(ticker_list):
         if ticker in prices_df.columns:
             prices = prices_df[ticker].dropna()
             volumes = volume_df[ticker].dropna()
-            if len(prices) < 252: continue # Ensure a full year of data
+            if len(prices) < 22: continue
 
             curr_price = prices.iloc[-1]
             row = {'Stock': ticker.replace('.NS', '')}
-
-            # Distance from 52W High
-            high_52w = prices.iloc[-252:].max()
-            row['Dist 52W High %'] = round(((curr_price / high_52w) - 1) * 100, 2)
 
             # Fundamentals logic
             try:
@@ -114,7 +112,7 @@ def generate_unified_dashboard(ticker_list):
                 row['PEG'] = float(yf_peg) if yf_peg else (row['T_PE'] / growth if growth > 0 else 0)
                 row['E_Growth (Forward < Trailing)'] = "YES" if (0 < row['F_PE'] < row['T_PE']) else "NO"
                 
-                time.sleep(0.05)
+                time.sleep(0.05) # Minor delay for API
             except:
                 row.update({'T_PE': 0, 'F_PE': 0, 'PEG': 0, 'T_EPS': 0, 'F_EPS': 0, 'E_Growth (Forward < Trailing)': "N/A"})
 
@@ -130,9 +128,10 @@ def generate_unified_dashboard(ticker_list):
                 row[f'{label}%'] = ret
                 all_rets.append(ret)
                 
+                # FIX: STAR LOGIC - compare against max of PREVIOUS closes in the period
                 period_data = prices[prices.index >= ref_date]
                 if len(period_data) > 1:
-                    historical_max = period_data.iloc[:-1].max()
+                    historical_max = period_data.iloc[:-1].max() # Exclude today
                     row[f'{label}BO'] = "★" if curr_price >= historical_max else "-"
                 else:
                     row[f'{label}BO'] = "-"
@@ -162,6 +161,4 @@ if selected_file:
             st.dataframe(high_conv, use_container_width=True, hide_index=True)
 
             st.subheader("Full Dashboard")
-            # Organize columns so Dist 52W is prominent
-            cols = ['Stock', 'Score', 'Dist 52W High %', 'T_PE', 'F_PE', 'PEG', 'RVOL'] + [c for c in res_df.columns if '%' in c or 'BO' in c]
-            st.dataframe(res_df[cols].style.background_gradient(subset=['Score', 'Dist 52W High %', '1M%'], cmap='RdYlGn'), use_container_width=True, hide_index=True)
+            st.dataframe(res_df.style.background_gradient(subset=['Score', '1M%', '3M%'], cmap='RdYlGn'), use_container_width=True, hide_index=True)
