@@ -3,14 +3,15 @@ import yfinance as yf
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
+import time
 from datetime import datetime, timedelta
 
 # Page Configuration
-st.set_page_config(page_title="Momentum Quadrant Scanner", layout="wide")
+st.set_page_config(page_title="Momentum & Valuation Dashboard", layout="wide")
 
 st.title("📈 Momentum vs. Valuation Dashboard")
 
-# --- SIDEBAR: DATA SOURCE ---
+# --- SIDEBAR SETTINGS ---
 st.sidebar.header("Settings")
 source_option = st.sidebar.radio("Select Input Method:", ("Project CSVs", "Upload New CSV"))
 
@@ -28,42 +29,52 @@ else:
     if uploaded_file:
         selected_file = uploaded_file
 
-# --- PLOTTING FUNCTION ---
+# --- QUADRANT PLOTTING FUNCTION ---
 def plot_quadrant_st(df):
     if df.empty: return
+    # Filter for stocks with valid PE and Score for plotting
     plot_df = df[df['T_PE'] > 0].copy()
-    if plot_df.empty: return
+    if plot_df.empty: 
+        st.warning("No stocks with valid T_PE found to plot the quadrant.")
+        return
 
     fig, ax = plt.subplots(figsize=(10, 6))
     pe_threshold = plot_df['T_PE'].median()
     momentum_threshold = 0
 
-    ax.scatter(plot_df['T_PE'], plot_df['Score'], s=plot_df['RVOL']*50, alpha=0.6, edgecolors='black')
+    scatter = ax.scatter(plot_df['T_PE'], plot_df['Score'], 
+                         s=plot_df['RVOL']*50, alpha=0.6, 
+                         c='dodgerblue', edgecolors='black')
 
     for i, row in plot_df.iterrows():
-        ax.annotate(row['Stock'], (row['T_PE'], row['Score']), fontsize=8)
+        ax.annotate(row['Stock'], (row['T_PE'], row['Score']), 
+                    xytext=(5, 5), textcoords='offset points', fontsize=8)
 
     ax.axvline(x=pe_threshold, color='red', linestyle='--', alpha=0.3)
     ax.axhline(y=momentum_threshold, color='red', linestyle='--', alpha=0.3)
 
     # Quadrant Labels
-    ax.text(pe_threshold*0.5, plot_df['Score'].max(), 'THE LEADER', color='green', fontweight='bold')
-    ax.text(pe_threshold*1.5, plot_df['Score'].max(), 'THE BUBBLE', color='orange', fontweight='bold')
-    ax.text(pe_threshold*0.5, plot_df['Score'].min(), 'TURNAROUND', color='blue', fontweight='bold')
-    ax.text(pe_threshold*1.5, plot_df['Score'].min(), 'VALUE TRAP', color='red', fontweight='bold')
+    ax.text(pe_threshold*0.5, plot_df['Score'].max(), 'THE LEADER\n(Low PE/High Mom)', color='green', fontweight='bold', ha='center')
+    ax.text(pe_threshold*2.0, plot_df['Score'].max(), 'THE BUBBLE\n(High PE/High Mom)', color='orange', fontweight='bold', ha='center')
+    ax.text(pe_threshold*0.5, plot_df['Score'].min(), 'TURNAROUND', color='blue', fontweight='bold', ha='center')
+    ax.text(pe_threshold*2.0, plot_df['Score'].min(), 'VALUE TRAP', color='red', fontweight='bold', ha='center')
 
     ax.set_xscale('log')
-    ax.set_xlabel('Trailing P/E (Log Scale)')
+    ax.set_xlabel('Trailing P/E Ratio (Log Scale)')
     ax.set_ylabel('Momentum Score')
+    ax.set_title("Momentum vs. Valuation Quadrant")
+    ax.grid(True, which="both", ls="-", alpha=0.1)
     st.pyplot(fig)
 
-# --- CORE PROCESSING ENGINE ---
+# --- DATA PROCESSING ENGINE ---
 def generate_unified_dashboard(ticker_list):
     end_date = datetime.now()
     start_date = end_date - timedelta(days=450)
     
     try:
         raw_data = yf.download(ticker_list, start=start_date, end=end_date, auto_adjust=False, progress=False)
+        if raw_data.empty: return None
+        
         prices_df = raw_data['Adj Close'] if len(ticker_list) > 1 else raw_data['Adj Close'].to_frame(name=ticker_list[0])
         volume_df = raw_data['Volume'] if len(ticker_list) > 1 else raw_data['Volume'].to_frame(name=ticker_list[0])
     except Exception as e:
@@ -73,7 +84,9 @@ def generate_unified_dashboard(ticker_list):
     intervals = {'1D': 2, '1W': 7, '1M': 30, '3M': 90, '6M': 180, '1Y': 365}
     results = []
 
-    for ticker in ticker_list:
+    # Progress bar for fundamentals since it takes time
+    progress_bar = st.progress(0)
+    for idx, ticker in enumerate(ticker_list):
         if ticker in prices_df.columns:
             prices = prices_df[ticker].dropna()
             volumes = volume_df[ticker].dropna()
@@ -82,29 +95,41 @@ def generate_unified_dashboard(ticker_list):
             curr_price = prices.iloc[-1]
             row = {'Stock': ticker.replace('.NS', '')}
 
-            # Fundamentals & PEG Fallback
+            # --- ROBUST FUNDAMENTALS FETCH ---
             try:
-                info = yf.Ticker(ticker).info
-                t_pe = info.get('trailingPE', 0)
-                f_pe = info.get('forwardPE', 0)
+                t_obj = yf.Ticker(ticker)
+                info = t_obj.info
+                
+                t_pe = info.get('trailingPE')
+                f_pe = info.get('forwardPE')
                 t_eps = info.get('trailingEps', 0)
                 f_eps = info.get('forwardEps', 0)
-
-                row['T_PE'] = t_pe if t_pe else 0
-                row['F_PE'] = f_pe if f_pe else 0
-                row['T_EPS'] = t_eps
-                row['F_EPS'] = f_eps
-
-                growth = ((f_eps / t_eps) - 1) * 100 if t_eps and f_eps and t_eps > 0 else 0
                 yf_peg = info.get('pegRatio')
-                row['PEG'] = yf_peg if yf_peg and yf_peg != 0 else (t_pe / growth if t_pe and growth > 0 else 0)
-                row['E_Growth (Forward < Trailing)'] = "YES" if (f_pe and t_pe and 0 < f_pe < t_pe) else "NO"
-            except:
-                row.update({'T_PE':0, 'F_PE':0, 'PEG':0, 'T_EPS':0, 'F_EPS':0, 'E_Growth (Forward < Trailing)':"N/A"})
 
-            # RVOL & Momentum
+                row['T_PE'] = float(t_pe) if t_pe else 0
+                row['F_PE'] = float(f_pe) if f_pe else 0
+                row['T_EPS'] = float(t_eps) if t_eps else 0
+                row['F_EPS'] = float(f_eps) if f_eps else 0
+
+                # PEG Calculation Fallback
+                growth_rate = ((row['F_EPS'] / row['T_EPS']) - 1) * 100 if row['T_EPS'] > 0 and row['F_EPS'] > 0 else 0
+                if yf_peg and yf_peg != 0:
+                    row['PEG'] = float(yf_peg)
+                else:
+                    row['PEG'] = (row['T_PE'] / growth_rate) if row['T_PE'] > 0 and growth_rate > 0 else 0
+
+                row['E_Growth (Forward < Trailing)'] = "YES" if (0 < row['F_PE'] < row['T_PE']) else "NO"
+                
+                # Small sleep to avoid Yahoo Finance rate limits
+                time.sleep(0.1)
+                
+            except:
+                row.update({'T_PE': 0, 'F_PE': 0, 'PEG': 0, 'T_EPS': 0, 'F_EPS': 0, 'E_Growth (Forward < Trailing)': "N/A"})
+
+            # RVOL
             row['RVOL'] = round(volumes.iloc[-1] / volumes.iloc[-21:-1].mean(), 2) if len(volumes) > 21 else 0
             
+            # Momentum & Breakouts
             all_rets = []
             for label, days in intervals.items():
                 ref_date = end_date - timedelta(days=days)
@@ -114,32 +139,58 @@ def generate_unified_dashboard(ticker_list):
                 ret = round(((curr_price / prev_price) - 1) * 100, 2) if pd.notna(prev_price) and prev_price != 0 else 0
                 row[f'{label}%'] = ret
                 all_rets.append(ret)
-                row[f'{label}BO'] = "★" if curr_price >= prices[prices.index >= ref_date].max() else "-"
+                
+                # Use max() of closing prices for breakout
+                max_close = prices[prices.index >= ref_date].max()
+                row[f'{label}BO'] = "★" if curr_price >= max_close else "-"
 
             row['Score'] = round(sum(all_rets) / len(all_rets), 2)
             results.append(row)
+            progress_bar.progress((idx + 1) / len(ticker_list))
 
     return pd.DataFrame(results).sort_values(by='Score', ascending=False)
 
 # --- EXECUTION ---
 if selected_file:
-    input_df = pd.read_csv(selected_file)
-    if st.button("🚀 Run Analysis"):
-        symbols = [s if str(s).endswith('.NS') else f"{s}.NS" for s in input_df['Symbol'].dropna()]
+    try:
+        input_df = pd.read_csv(selected_file)
+        input_df.columns = input_df.columns.str.strip()
         
-        with st.spinner("Analyzing Market Data..."):
-            res_df = generate_unified_dashboard(symbols)
+        if st.button("🚀 Run Analysis"):
+            symbols = [str(s).strip().upper() for s in input_df['Symbol'].dropna()]
+            symbols = [s if s.endswith('.NS') else f"{s}.NS" for s in symbols]
+            
+            with st.spinner("Fetching Data and Plotting Quadrants..."):
+                res_df = generate_unified_dashboard(symbols)
 
-        if res_df is not None:
-            # 1. Plotting
-            st.subheader("Momentum vs. Valuation Quadrant")
-            plot_quadrant_st(res_df)
+            if res_df is not None and not res_df.empty:
+                # 1. Plotting
+                st.subheader("Momentum vs. Valuation Quadrant")
+                plot_quadrant_st(res_df)
 
-            # 2. High Conviction Filter
-            st.subheader("🔥 High Conviction Picks")
-            high_conv = res_df[(res_df['Score'] > 0) & (res_df['E_Growth (Forward < Trailing)'] == "YES") & (res_df['PEG'] > 0) & (res_df['PEG'] < 1.5)]
-            st.dataframe(high_conv, use_container_width=True, hide_index=True)
+                # 2. High Conviction Filter
+                st.subheader("🔥 High Conviction Picks")
+                st.info("Score > 0 | PEG < 1.5 | Forward PE < Trailing PE")
+                high_conv = res_df[
+                    (res_df['Score'] > 0) & 
+                    (res_df['E_Growth (Forward < Trailing)'] == "YES") & 
+                    (res_df['PEG'] > 0) & 
+                    (res_df['PEG'] < 1.5)
+                ]
+                st.dataframe(high_conv, use_container_width=True, hide_index=True)
 
-            # 3. Full Table
-            st.subheader("All Results")
-            st.dataframe(res_df.style.background_gradient(subset=['Score', '1M%', '3M%'], cmap='RdYlGn'), use_container_width=True, hide_index=True)
+                # 3. Full Table
+                st.subheader("Full Dashboard")
+                # Define column order for better readability
+                cols = ['Stock', 'Score', 'T_PE', 'F_PE', 'PEG', 'E_Growth (Forward < Trailing)', 'RVOL'] + \
+                       [c for c in res_df.columns if '%' in c or 'BO' in c]
+                
+                st.dataframe(
+                    res_df[cols].style.background_gradient(subset=['Score', '1M%', '3M%', '6M%'], cmap='RdYlGn'),
+                    use_container_width=True, hide_index=True
+                )
+                
+                csv = res_df.to_csv(index=False).encode('utf-8')
+                st.download_button("Download Full CSV", data=csv, file_name="momentum_analysis.csv")
+    except Exception as e:
+        st.error(f"Error: {e}")
