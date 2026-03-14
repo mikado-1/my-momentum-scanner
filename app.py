@@ -86,7 +86,7 @@ def generate_unified_dashboard(ticker_list):
         if ticker in prices_df.columns:
             prices = prices_df[ticker].dropna()
             volumes = volume_df[ticker].dropna()
-            if len(prices) < 252: continue 
+            if len(prices) < 252: continue # Ensure a full year of data
 
             curr_price = prices.iloc[-1]
             row = {'Stock': ticker.replace('.NS', '')}
@@ -95,7 +95,7 @@ def generate_unified_dashboard(ticker_list):
             high_52w = prices.iloc[-252:].max()
             row['Dist 52W High %'] = round(((curr_price / high_52w) - 1) * 100, 2)
 
-            # Fundamentals
+            # Fundamentals logic
             try:
                 t_obj = yf.Ticker(ticker)
                 info = t_obj.info
@@ -114,7 +114,7 @@ def generate_unified_dashboard(ticker_list):
                 row['PEG'] = float(yf_peg) if yf_peg else (row['T_PE'] / growth if growth > 0 else 0)
                 row['E_Growth (Forward < Trailing)'] = "YES" if (0 < row['F_PE'] < row['T_PE']) else "NO"
                 
-                time.sleep(0.05) # Tiny delay for API stability
+                time.sleep(0.05)
             except:
                 row.update({'T_PE': 0, 'F_PE': 0, 'PEG': 0, 'T_EPS': 0, 'F_EPS': 0, 'E_Growth (Forward < Trailing)': "N/A"})
 
@@ -153,7 +153,7 @@ if selected_file:
         with st.spinner("Processing..."):
             res_df = generate_unified_dashboard(symbols)
 
-        if res_df is not None and not res_df.empty:
+        if res_df is not None:
             st.subheader("Momentum vs. Valuation Quadrant")
             plot_quadrant_st(res_df)
 
@@ -161,40 +161,7 @@ if selected_file:
             high_conv = res_df[(res_df['Score'] > 0) & (res_df['E_Growth (Forward < Trailing)'] == "YES") & (res_df['PEG'] > 0) & (res_df['PEG'] < 1.5)]
             st.dataframe(high_conv, use_container_width=True, hide_index=True)
 
-            # --- ERROR-PROOF STYLING ---
-            def color_near_high(val):
-                try:
-                    num = float(val)
-                    return 'background-color: #2ecc71; color: white' if -10 <= num <= 0 else ''
-                except (ValueError, TypeError):
-                    return ''
-
             st.subheader("Full Dashboard")
-            
-            # Step 1: Explicitly build the display dataframe
-            main_cols = ['Stock', 'Score', 'Dist 52W High %', 'T_PE', 'F_PE', 'PEG', 'RVOL']
-            extra_cols = [c for c in res_df.columns if '%' in c or 'BO' in c]
-            final_cols = [c for c in (main_cols + extra_cols) if c in res_df.columns]
-            
-            # Hard copy to prevent Styler fragment errors
-            display_df = res_df[final_cols].copy()
-            
-            # Step 2: Initialize styler
-            styled_df = display_df.style
-
-            # Step 3: Conditional styling only on columns that exist in display_df
-            grad_targets = [c for c in ['Score', '1M%'] if c in display_df.columns]
-            if grad_targets:
-                styled_df = styled_df.background_gradient(subset=grad_targets, cmap='RdYlGn')
-            
-            if 'Dist 52W High %' in display_df.columns:
-                # Python 3.14/Pandas 2.2+ check
-                if hasattr(styled_df, 'map'):
-                    styled_df = styled_df.map(color_near_high, subset=['Dist 52W High %'])
-                else:
-                    styled_df = styled_df.applymap(color_near_high, subset=['Dist 52W High %'])
-
-            # Step 4: Final output
-            st.dataframe(styled_df, use_container_width=True, hide_index=True)
-        else:
-            st.error("No data could be retrieved. Check your CSV symbols.")
+            # Organize columns so Dist 52W is prominent
+            cols = ['Stock', 'Score', 'Dist 52W High %', 'T_PE', 'F_PE', 'PEG', 'RVOL'] + [c for c in res_df.columns if '%' in c or 'BO' in c]
+            st.dataframe(res_df[cols].style.background_gradient(subset=['Score', 'Dist 52W High %', '1M%'], cmap='RdYlGn'), use_container_width=True, hide_index=True)
