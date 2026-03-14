@@ -1,16 +1,18 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 
 # Page Configuration
 st.set_page_config(page_title="Momentum Scanner", layout="wide")
 
 st.title("📈 Momentum & Breakout Scanner")
-st.markdown("Upload your CSV file with a **Symbol** column to analyze performance.")
+st.markdown("Upload your CSV file with a **Symbol** column to analyze performance based on **Closing Prices**.")
 
 def generate_unified_dashboard(ticker_list):
     end_date = datetime.now()
+    # Buffer to ensure we have enough history for the 1Y calculation
     start_date = end_date - timedelta(days=450)
 
     try:
@@ -42,31 +44,41 @@ def generate_unified_dashboard(ticker_list):
             prices = prices_df[ticker].dropna()
             volumes = volume_df[ticker].dropna()
 
-            if len(prices) < 22: continue
+            # Need history for volume and 1Y price
+            if len(prices) < 250: continue
 
             curr_price = prices.iloc[-1]
             row = {'Stock': ticker.replace('.NS', '')}
 
-            # RVOL
+            # RVOL (Current Volume / 20-Day Avg Volume)
             avg_vol_20d = volumes.iloc[-21:-1].mean()
             row['RVOL'] = round(volumes.iloc[-1] / avg_vol_20d, 2) if avg_vol_20d > 0 else 0
 
             all_rets = []
             for label, days in intervals.items():
                 target_date = end_date - timedelta(days=days)
+                
+                # Fetch price at start of interval
                 prev_price = prices.asof(target_date)
                 
-                # Handle 1D specifically for previous close
+                # Special case for 1D (previous trading day)
                 if label == '1D' and len(prices) >= 2:
                     prev_price = prices.iloc[-2]
 
+                # Return calculation
                 ret = round(((curr_price / prev_price) - 1) * 100, 2) if pd.notna(prev_price) and prev_price != 0 else 0
                 row[f'{label} %'] = ret
                 all_rets.append(ret)
 
-                # Breakout check
-                period_high = prices[prices.index >= target_date].max()
-                row[f'{label} BO'] = "★" if curr_price >= period_high else "-"
+                # --- NEW BREAKOUT LOGIC (CLOSE BASED) ---
+                # Look at all closes from the target date up to the day BEFORE today
+                period_history = prices[prices.index >= target_date]
+                if len(period_history) > 1:
+                    # Highest closing price in the lookback period
+                    max_close_in_period = period_history.iloc[:-1].max() 
+                    row[f'{label} BO'] = "★" if curr_price >= max_close_in_period else "-"
+                else:
+                    row[f'{label} BO'] = "-"
 
             row['Score'] = round(sum(all_rets) / len(all_rets), 2)
             results.append(row)
@@ -94,9 +106,14 @@ if uploaded_file is not None:
             if final_df is not None and not final_df.empty:
                 st.success("Analysis Complete!")
                 
-                # Display dataframe with formatting
+                # Styling
+                styled_df = final_df.style.background_gradient(
+                    subset=['Score', '1M %', '3M %', '6M %'], 
+                    cmap='RdYlGn'
+                )
+
                 st.dataframe(
-                    final_df.style.background_gradient(subset=['Score', '1M %', '3M %'], cmap='RdYlGn'),
+                    styled_df,
                     use_container_width=True,
                     hide_index=True
                 )
