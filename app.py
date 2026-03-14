@@ -41,7 +41,6 @@ def plot_quadrant_st(df):
     pe_threshold = plot_df['T_PE'].median()
     momentum_threshold = 0
 
-    # Fixed size points
     ax.scatter(plot_df['T_PE'], plot_df['Score'], 
                s=100, alpha=0.7, 
                c='dodgerblue', edgecolors='black')
@@ -115,7 +114,7 @@ def generate_unified_dashboard(ticker_list):
                 row['PEG'] = float(yf_peg) if yf_peg else (row['T_PE'] / growth if growth > 0 else 0)
                 row['E_Growth (Forward < Trailing)'] = "YES" if (0 < row['F_PE'] < row['T_PE']) else "NO"
                 
-                time.sleep(0.05)
+                time.sleep(0.05) # Tiny delay for API stability
             except:
                 row.update({'T_PE': 0, 'F_PE': 0, 'PEG': 0, 'T_EPS': 0, 'F_EPS': 0, 'E_Growth (Forward < Trailing)': "N/A"})
 
@@ -162,32 +161,40 @@ if selected_file:
             high_conv = res_df[(res_df['Score'] > 0) & (res_df['E_Growth (Forward < Trailing)'] == "YES") & (res_df['PEG'] > 0) & (res_df['PEG'] < 1.5)]
             st.dataframe(high_conv, use_container_width=True, hide_index=True)
 
-            # --- ROBUST STYLING ---
+            # --- ERROR-PROOF STYLING ---
             def color_near_high(val):
                 try:
                     num = float(val)
                     return 'background-color: #2ecc71; color: white' if -10 <= num <= 0 else ''
-                except:
+                except (ValueError, TypeError):
                     return ''
 
             st.subheader("Full Dashboard")
-            base_cols = ['Stock', 'Score', 'Dist 52W High %', 'T_PE', 'F_PE', 'PEG', 'RVOL']
+            
+            # Step 1: Explicitly build the display dataframe
+            main_cols = ['Stock', 'Score', 'Dist 52W High %', 'T_PE', 'F_PE', 'PEG', 'RVOL']
             extra_cols = [c for c in res_df.columns if '%' in c or 'BO' in c]
-            final_display_cols = [c for c in (base_cols + extra_cols) if c in res_df.columns]
+            final_cols = [c for c in (main_cols + extra_cols) if c in res_df.columns]
             
-            df_to_style = res_df[final_display_cols].copy()
-            styled_df = df_to_style.style
+            # Hard copy to prevent Styler fragment errors
+            display_df = res_df[final_cols].copy()
+            
+            # Step 2: Initialize styler
+            styled_df = display_df.style
 
-            grad_cols = [c for c in ['Score', '1M%'] if c in df_to_style.columns]
-            if grad_cols:
-                styled_df = styled_df.background_gradient(subset=grad_cols, cmap='RdYlGn')
+            # Step 3: Conditional styling only on columns that exist in display_df
+            grad_targets = [c for c in ['Score', '1M%'] if c in display_df.columns]
+            if grad_targets:
+                styled_df = styled_df.background_gradient(subset=grad_targets, cmap='RdYlGn')
             
-            if 'Dist 52W High %' in df_to_style.columns:
+            if 'Dist 52W High %' in display_df.columns:
+                # Python 3.14/Pandas 2.2+ check
                 if hasattr(styled_df, 'map'):
                     styled_df = styled_df.map(color_near_high, subset=['Dist 52W High %'])
                 else:
                     styled_df = styled_df.applymap(color_near_high, subset=['Dist 52W High %'])
 
+            # Step 4: Final output
             st.dataframe(styled_df, use_container_width=True, hide_index=True)
         else:
-            st.error("No results found. Check CSV symbols.")
+            st.error("No data could be retrieved. Check your CSV symbols.")
