@@ -41,6 +41,7 @@ def plot_quadrant_st(df):
     pe_threshold = plot_df['T_PE'].median()
     momentum_threshold = 0
 
+    # Fixed size (s=100) for all points - no size variation
     ax.scatter(plot_df['T_PE'], plot_df['Score'], 
                s=100, alpha=0.7, 
                c='dodgerblue', edgecolors='black')
@@ -52,6 +53,7 @@ def plot_quadrant_st(df):
     ax.axvline(x=pe_threshold, color='red', linestyle='--', alpha=0.3)
     ax.axhline(y=momentum_threshold, color='red', linestyle='--', alpha=0.3)
 
+    # Quadrant Labels
     ax.text(pe_threshold*0.5, plot_df['Score'].max(), 'THE LEADER', color='green', fontweight='bold', ha='center')
     ax.text(pe_threshold*2.0, plot_df['Score'].max(), 'THE BUBBLE', color='orange', fontweight='bold', ha='center')
     ax.text(pe_threshold*0.5, plot_df['Score'].min(), 'TURNAROUND', color='blue', fontweight='bold', ha='center')
@@ -91,11 +93,11 @@ def generate_unified_dashboard(ticker_list):
             curr_price = prices.iloc[-1]
             row = {'Stock': ticker.replace('.NS', '')}
 
-            # Distance from 52W High
+            # Dist 52W High
             high_52w = prices.iloc[-252:].max()
             row['Dist 52W High %'] = round(((curr_price / high_52w) - 1) * 100, 2)
 
-            # Fundamentals logic
+            # Fundamentals
             try:
                 t_obj = yf.Ticker(ticker)
                 info = t_obj.info
@@ -130,6 +132,7 @@ def generate_unified_dashboard(ticker_list):
                 row[f'{label}%'] = ret
                 all_rets.append(ret)
                 
+                # FIX STAR LOGIC: Compare current close against max of PREVIOUS closes in window
                 period_data = prices[prices.index >= ref_date]
                 if len(period_data) > 1:
                     historical_max = period_data.iloc[:-1].max()
@@ -153,7 +156,7 @@ if selected_file:
         with st.spinner("Processing..."):
             res_df = generate_unified_dashboard(symbols)
 
-        if res_df is not None:
+        if res_df is not None and not res_df.empty:
             st.subheader("Momentum vs. Valuation Quadrant")
             plot_quadrant_st(res_df)
 
@@ -161,15 +164,28 @@ if selected_file:
             high_conv = res_df[(res_df['Score'] > 0) & (res_df['E_Growth (Forward < Trailing)'] == "YES") & (res_df['PEG'] > 0) & (res_df['PEG'] < 1.5)]
             st.dataframe(high_conv, use_container_width=True, hide_index=True)
 
-            # --- CUSTOM STYLING ---
+            # --- STYLING LOGIC ---
             def color_near_high(val):
-                return 'background-color: #2ecc71; color: white' if -10 <= val <= 0 else ''
+                try:
+                    return 'background-color: #2ecc71; color: white' if -10 <= float(val) <= 0 else ''
+                except:
+                    return ''
 
             st.subheader("Full Dashboard")
-            cols = ['Stock', 'Score', 'Dist 52W High %', 'T_PE', 'F_PE', 'PEG', 'RVOL'] + [c for c in res_df.columns if '%' in c or 'BO' in c]
             
-            styled_df = res_df[cols].style \
-                .background_gradient(subset=['Score', '1M%'], cmap='RdYlGn') \
-                .applymap(color_near_high, subset=['Dist 52W High %'])
+            # Safe column selection
+            display_cols = ['Stock', 'Score', 'Dist 52W High %', 'T_PE', 'F_PE', 'PEG', 'RVOL']
+            mom_cols = [c for c in res_df.columns if '%' in c or 'BO' in c]
+            final_cols = [c for c in (display_cols + mom_cols) if c in res_df.columns]
+            
+            styled_df = res_df[final_cols].style \
+                .background_gradient(subset=['Score', '1M%'], cmap='RdYlGn')
+            
+            # Check if column exists before applying map to avoid KeyError
+            if 'Dist 52W High %' in res_df.columns:
+                if hasattr(styled_df, 'map'):
+                    styled_df = styled_df.map(color_near_high, subset=['Dist 52W High %'])
+                else:
+                    styled_df = styled_df.applymap(color_near_high, subset=['Dist 52W High %'])
 
             st.dataframe(styled_df, use_container_width=True, hide_index=True)
